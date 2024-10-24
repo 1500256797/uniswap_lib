@@ -1,18 +1,26 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use ethers::{
-    contract::abigen,
-    providers::{Http, Provider},
-    types::{Address, U256},
+
+use alloy::{primitives::utils::format_units, sol};
+use alloy::{
+    primitives::{Address, U256},
+    providers::ProviderBuilder,
 };
 use std::str::FromStr;
-abigen!(ERC20, "src/abi/erc20.json");
+
+sol!(
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    ERC20,
+    "src/abi/erc20.json"
+);
 pub fn from_readable_amount(amount_in: f64, decimals: u8) -> U256 {
     U256::from((amount_in * 10_f64.powi(decimals as i32)) as u128)
 }
 pub fn to_readable_amount(amount_in: U256, decimals: u8) -> f64 {
-    amount_in.as_u128() as f64 / 10_f64.powi(decimals as i32)
+    let num: String = format_units(amount_in, decimals).unwrap();
+    num.parse::<f64>().unwrap()
 }
 
 #[derive(Debug, Clone)]
@@ -33,11 +41,11 @@ impl Token {
     }
     pub async fn new_from_online(address: &str, rpc_url: &str) -> Result<Self> {
         let address = Address::from_str(address).unwrap();
-        let provider = Provider::<Http>::try_from(rpc_url)?;
+        let provider = ProviderBuilder::new().on_builtin(&rpc_url).await?;
         let client = Arc::new(provider);
         let contract = ERC20::new(address, client);
-        let name: String = contract.method("name", ())?.call().await?;
-        let decimals: u8 = contract.method("decimals", ())?.call().await?;
+        let name: String = contract.name().call().await?._0;
+        let decimals: u8 = contract.decimals().call().await?._0;
 
         Ok(Self {
             address,
@@ -49,6 +57,8 @@ impl Token {
 
 #[cfg(test)]
 mod tests {
+    use alloy::primitives::address;
+
     use super::*;
 
     #[test]
@@ -70,12 +80,9 @@ mod tests {
             Token::new_from_online("0xA35923162C49cF95e6BF26623385eb431ad920D3", mainet_rpc)
                 .await
                 .unwrap();
-        assert_eq!(
-            token.address,
-            "0xa35923162c49cf95e6bf26623385eb431ad920d3"
-                .parse()
-                .unwrap()
-        );
+        let expected_addr =
+            Address::from_str("0xA35923162C49cF95e6BF26623385eb431ad920D3").unwrap();
+        assert_eq!(token.address, expected_addr);
         assert_eq!(token.decimals, 18);
         assert_eq!(token.token_name, "Turbo");
     }

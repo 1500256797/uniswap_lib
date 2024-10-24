@@ -1,15 +1,23 @@
 use std::sync::Arc;
 
-use anyhow::Result;
-use ethers::{
-    prelude::abigen,
-    providers::{Http, Provider},
-    types::{Address, U256},
+use alloy::{
+    network::TransactionBuilder,
+    primitives::{aliases::U24, Address, U160, U256},
+    providers::ProviderBuilder,
 };
+use alloy::{rpc::types::TransactionRequest, sol};
+use anyhow::Result;
 use std::str::FromStr;
 
+// Codegen from ABI file to interact with the contract.
+sol!(
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    UNIV3_ROUTER,
+    "src/abi/uniswapv3_router.json"
+);
+
 use crate::unswapv3_pool::UniswapPoolFee;
-abigen!(UNIV3_ROUTER, "src/abi/uniswapv3_router.json");
 const UNIV3_ROUTER_CONTRACT_ADDR: &str = "0xE592427A0AEce92De3Edee1F18E0157C05861564";
 pub struct ExactInputSingleParams {
     pub token_in: Address,
@@ -22,18 +30,18 @@ pub struct ExactInputSingleParams {
 }
 
 impl TryFrom<ExactInputSingleParams>
-    for crate::uniswapv3_router::univ3_router::ExactInputSingleParams
+    for crate::uniswapv3_router::IV3SwapRouter::ExactInputSingleParams
 {
     type Error = UniswapV3RouterError;
     fn try_from(value: ExactInputSingleParams) -> std::result::Result<Self, Self::Error> {
-        let val = crate::uniswapv3_router::univ3_router::ExactInputSingleParams {
-            token_in: value.token_in,
-            token_out: value.token_out,
-            fee: value.fee.as_u32(),
+        let val = crate::uniswapv3_router::IV3SwapRouter::ExactInputSingleParams {
+            tokenIn: value.token_in,
+            tokenOut: value.token_out,
+            fee: U24::from(value.fee.as_u32()),
             recipient: value.recipient,
-            amount_in: value.amount_in,
-            amount_out_minimum: value.amount_out_minimum,
-            sqrt_price_limit_x96: value.sqrt_price_limit_x96,
+            amountIn: value.amount_in,
+            amountOutMinimum: value.amount_out_minimum,
+            sqrtPriceLimitX96: U160::from(value.sqrt_price_limit_x96),
         };
         Ok(val)
     }
@@ -50,18 +58,18 @@ pub struct ExactOutputSingleParams {
 }
 
 impl TryFrom<ExactOutputSingleParams>
-    for crate::uniswapv3_router::univ3_router::ExactOutputSingleParams
+    for crate::uniswapv3_router::IV3SwapRouter::ExactOutputSingleParams
 {
     type Error = UniswapV3RouterError;
     fn try_from(value: ExactOutputSingleParams) -> std::result::Result<Self, Self::Error> {
-        let val = crate::uniswapv3_router::univ3_router::ExactOutputSingleParams {
-            token_in: value.token_in,
-            token_out: value.token_out,
-            fee: value.fee.as_u32(),
+        let val = crate::uniswapv3_router::IV3SwapRouter::ExactOutputSingleParams {
+            tokenIn: value.token_in,
+            tokenOut: value.token_out,
+            fee: U24::from(value.fee.as_u32()),
             recipient: value.recipient,
-            amount_out: value.amount_out,
-            amount_in_maximum: value.amount_in_maximum,
-            sqrt_price_limit_x96: value.sqrt_price_limit_x96,
+            amountOut: value.amount_out,
+            amountInMaximum: value.amount_in_maximum,
+            sqrtPriceLimitX96: U160::from(value.sqrt_price_limit_x96),
         };
         Ok(val)
     }
@@ -92,36 +100,32 @@ pub enum UniswapV3RouterError {
 pub async fn execute(
     command: UniswapV3RouterCommand,
     rpc_url: String,
-) -> Result<UniswapV3RouterResult, UniswapV3RouterError> {
-    let provider = Provider::<Http>::try_from(rpc_url)
+) -> Result<TransactionRequest, UniswapV3RouterError> {
+    let provider = ProviderBuilder::new()
+        .with_recommended_fillers()
+        .on_builtin(&rpc_url)
+        .await
         .map_err(|e| UniswapV3RouterError::InvalidRpcUrl(e.to_string()))?;
+
     let client = Arc::new(provider);
     let router_address = Address::from_str(UNIV3_ROUTER_CONTRACT_ADDR)
         .map_err(|e| UniswapV3RouterError::InvalidAddress(e.to_string()))?;
     let contract = UNIV3_ROUTER::new(router_address, client);
+
     match command {
-        UniswapV3RouterCommand::ExactInputSingle(params) => {
-            let call_res = contract
-                .exact_input_single(params.try_into().unwrap())
-                .call()
-                .await
-                .map_err(|e| UniswapV3RouterError::WrongPoolFee(e.to_string()))?;
-            Ok(UniswapV3RouterResult::ExactInputSingle(call_res))
-        }
-        UniswapV3RouterCommand::ExactOutputSingle(params) => {
-            let call_res = contract
-                .exact_output_single(params.try_into().unwrap())
-                .call()
-                .await
-                .map_err(|e| UniswapV3RouterError::WrongPoolFee(e.to_string()))?;
-            Ok(UniswapV3RouterResult::ExactOutputSingle(call_res))
-        }
+        UniswapV3RouterCommand::ExactInputSingle(params) => Ok(contract
+            .exactInputSingle(params.try_into()?)
+            .into_transaction_request()),
+        UniswapV3RouterCommand::ExactOutputSingle(params) => Ok(contract
+            .exactOutputSingle(params.try_into()?)
+            .into_transaction_request()),
     }
 }
 
 // 0x35c8941c294E9d60E0742CB9f3d58c0D1Ba2DEc4
 #[cfg(test)]
 mod tests {
+
     use crate::utils::{from_readable_amount, Token};
 
     use super::*;
@@ -139,34 +143,21 @@ mod tests {
             .parse()
             .unwrap();
         let amount_in = from_readable_amount(0.02, weth.decimals);
-        let amount_out = 0;
         let params = ExactInputSingleParams {
             token_in: weth.address,
             token_out: ethc.address,
             fee: UniswapPoolFee::Fee10000,
             recipient: receiver,
             amount_in,
-            amount_out_minimum: 0.into(),
-            sqrt_price_limit_x96: 0.into(),
+            amount_out_minimum: U256::ZERO,
+            sqrt_price_limit_x96: U256::ZERO,
         };
-
         let res = execute(
             UniswapV3RouterCommand::ExactInputSingle(params),
             rpc_url.to_string(),
         )
-        .await;
-
-        match res {
-            Ok(UniswapV3RouterResult::ExactInputSingle(amount_out)) => {
-                println!("交换成功，获得的代币数量: {}", amount_out);
-                assert!(amount_out > U256::zero(), "输出数量应该大于0");
-            }
-            Ok(_) => {
-                panic!("预期ExactInputSingle结果，但收到了其他结果");
-            }
-            Err(e) => {
-                panic!("交换失败: {}", e);
-            }
-        }
+        .await
+        .unwrap();
+        println!("{:?}", res);
     }
 }

@@ -1,16 +1,21 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use ethers::{
-    prelude::abigen,
-    providers::{Http, Provider},
-    types::{Address, U256},
+
+use alloy::sol;
+use alloy::{
+    primitives::{aliases::U24, Address, U160, U256},
+    providers::ProviderBuilder,
 };
 use std::str::FromStr;
 
 use crate::unswapv3_pool::UniswapPoolFee;
-abigen!(UNIV3_QUOTER, "src/abi/uniswapv3_quoter.json");
-
+sol!(
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    UNIV3_QUOTER,
+    "src/abi/uniswapv3_quoter.json"
+);
 const UNIV3_QUOTER_CONTRACT_ADDR: &str = "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6";
 pub struct QuoteExactInputSingleParams {
     pub token_in: Address,
@@ -58,8 +63,11 @@ pub async fn execute(
     command: UniswapV3QuoterCommand,
     rpc_url: String,
 ) -> Result<UniswapV3QuoterResult, UniswapV3QuoterError> {
-    let provider = Provider::<Http>::try_from(rpc_url)
+    let provider = ProviderBuilder::new()
+        .on_builtin(&rpc_url)
+        .await
         .map_err(|e| UniswapV3QuoterError::InvalidRpcUrl(e.to_string()))?;
+
     let client = Arc::new(provider);
     let quoter_address = Address::from_str(UNIV3_QUOTER_CONTRACT_ADDR)
         .map_err(|e| UniswapV3QuoterError::InvalidAddress(e.to_string()))?;
@@ -67,31 +75,35 @@ pub async fn execute(
     match command {
         UniswapV3QuoterCommand::QuoteExactInputSingle(params) => {
             let call_res = contract
-                .quote_exact_input_single(
+                .quoteExactInputSingle(
                     params.token_in,
                     params.token_out,
-                    params.fee.as_u32(),
+                    U24::from(params.fee.as_u32()),
                     params.amount_in,
-                    params.sqrt_price_limit_x96,
+                    U160::from(params.sqrt_price_limit_x96),
                 )
                 .call()
                 .await
                 .map_err(|e| UniswapV3QuoterError::WrongPoolFee)?;
-            Ok(UniswapV3QuoterResult::QuoteExactInputSingle(call_res))
+            Ok(UniswapV3QuoterResult::QuoteExactInputSingle(
+                call_res.amountOut,
+            ))
         }
         UniswapV3QuoterCommand::QuoteExactOutputSingle(params) => {
             let call_res = contract
-                .quote_exact_output_single(
+                .quoteExactOutputSingle(
                     params.token_in,
                     params.token_out,
-                    params.fee.as_u32(),
+                    U24::from(params.fee.as_u32()),
                     params.amount_out,
-                    params.sqrt_price_limit_x96,
+                    U160::from(params.sqrt_price_limit_x96),
                 )
                 .call()
                 .await
                 .map_err(|e| UniswapV3QuoterError::WrongPoolFee)?;
-            Ok(UniswapV3QuoterResult::QuoteExactOutputSingle(call_res))
+            Ok(UniswapV3QuoterResult::QuoteExactOutputSingle(
+                call_res.amountIn,
+            ))
         }
         _ => Err(UniswapV3QuoterError::InvalidCommand),
     }
@@ -119,7 +131,7 @@ mod tests {
             token_out,
             fee: UniswapPoolFee::Fee10000,
             amount_in: amount_in.into(),
-            sqrt_price_limit_x96: sqrt_price_limit_x96.into(),
+            sqrt_price_limit_x96: U256::from(sqrt_price_limit_x96),
         };
         let command = UniswapV3QuoterCommand::QuoteExactInputSingle(quote_exact_input_params);
         let res = execute(command, "https://eth.llamarpc.com".to_string())
@@ -145,7 +157,7 @@ mod tests {
             token_out: turbo,
             fee: UniswapPoolFee::Fee10000,
             amount_in: amount_in.into(),
-            sqrt_price_limit_x96: sqrt_price_limit_x96.into(),
+            sqrt_price_limit_x96: U256::from(sqrt_price_limit_x96),
         };
         let command = UniswapV3QuoterCommand::QuoteExactInputSingle(quote_exact_input_params);
         let res = execute(command, "https://eth.llamarpc.com".to_string())
@@ -153,9 +165,9 @@ mod tests {
             .unwrap();
 
         if let UniswapV3QuoterResult::QuoteExactInputSingle(res) = res {
-            println!("{}", res.as_u128());
             let amount_out = to_readable_amount(res, 18);
             println!("amount_out: {}", amount_out);
+            assert!(amount_out > 0.0);
         }
     }
 
@@ -172,7 +184,7 @@ mod tests {
             token_out: meme,
             fee: UniswapPoolFee::Fee10000,
             amount_out: amount_out.into(),
-            sqrt_price_limit_x96: sqrt_price_limit_x96.into(),
+            sqrt_price_limit_x96: U256::from(sqrt_price_limit_x96),
         };
         let command = UniswapV3QuoterCommand::QuoteExactOutputSingle(quote_exact_out_params);
         let res = execute(command, "https://eth.llamarpc.com".to_string())
@@ -198,7 +210,7 @@ mod tests {
             token_out: meme,
             fee: UniswapPoolFee::Fee10000,
             amount_out: amount_out.into(),
-            sqrt_price_limit_x96: sqrt_price_limit_x96.into(),
+            sqrt_price_limit_x96: U256::from(sqrt_price_limit_x96),
         };
         let command = UniswapV3QuoterCommand::QuoteExactOutputSingle(quote_exact_out_params);
         let res = execute(command, "https://eth.llamarpc.com".to_string())
@@ -224,7 +236,7 @@ mod tests {
             token_out,
             fee: UniswapPoolFee::Fee100,
             amount_in: amount_in.into(),
-            sqrt_price_limit_x96: sqrt_price_limit_x96.into(),
+            sqrt_price_limit_x96: U256::from(sqrt_price_limit_x96),
         };
         let command = UniswapV3QuoterCommand::QuoteExactInputSingle(quote_exact_input_params);
         let res = execute(command, "https://eth.llamarpc.com".to_string())
