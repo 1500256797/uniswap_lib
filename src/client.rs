@@ -48,6 +48,7 @@ pub struct SwapParams {
     pub amount_out_min: U256,
     pub pool_fee: UniswapPoolFee,
     pub recipient: Address,
+    pub deadline: U256,
 }
 
 pub async fn swap(
@@ -71,6 +72,7 @@ pub async fn swap(
                         token_out: params.token_out,
                         fee: params.pool_fee,
                         recipient: params.recipient,
+                        deadline: params.deadline,
                         amount_in: params.amount_in,
                         amount_out_minimum: params.amount_out_min,
                         sqrt_price_limit_x96: U256::from(0),
@@ -115,10 +117,11 @@ mod tests {
         let params = SwapParams {
             token_in: weth.address,
             token_out: ethc.address,
-            amount_in: from_readable_amount(0.02, weth.decimals),
+            amount_in: from_readable_amount(0.01, weth.decimals),
             amount_out_min: U256::ZERO,
             pool_fee: UniswapPoolFee::Fee10000,
             recipient: receiver,
+            deadline: U256::ZERO,
         };
         let tx = swap(
             UniswapSupportChain::Ethereum,
@@ -130,4 +133,5 @@ mod tests {
         .await
         .unwrap();
     }
+    
 }
